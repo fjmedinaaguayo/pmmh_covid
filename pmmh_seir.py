@@ -46,7 +46,7 @@ def BM_SEIR(V_in, params, num_particles, N, m):
     V[:,:,0] = V_in
 
     for t in range(1, num_steps + 1):
-        log_beta_capped = np.clip(V[4,:,t-1], -1, 1)
+        log_beta_capped = np.clip(V[4,:,t-1], -2, 2)
         
         infections = np.exp(log_beta_capped) * V[0, :, t-1] * V[2, :, t-1] / N
         latent = kappa * V[1, :, t-1]
@@ -131,7 +131,7 @@ class SEIRSMC:
         num_particles = particles_t.shape[1]
         
         proposed_log_beta = particles_t[-1, :] + np.random.normal(0, step_size, num_particles)
-        proposed_log_beta = np.clip(proposed_log_beta, -1, 1)
+        proposed_log_beta = np.clip(proposed_log_beta, -2, 2)
         
         proposed_particles = particles_t.copy()
         proposed_particles[-1, :] = proposed_log_beta
@@ -427,10 +427,10 @@ class PMMH:
         proposed = current_params + np.random.normal(0, step_sizes, len(current_params))
         
         # Clip to valid ranges (0, 1)
-        proposed[0] = np.clip(proposed[0], 0.01, 0.99)  # kappa
-        proposed[1] = np.clip(proposed[1], 0.01, 0.99)  # gamma
-        proposed[2] = np.clip(proposed[2], 0.01, 0.99)  # sigma
-        proposed[3] = np.clip(proposed[3], 0.01, 0.99)  # overdispersion
+        # proposed[0] = np.clip(proposed[0], 0.0001, 0.9999)  # kappa
+        # proposed[1] = np.clip(proposed[1], 0.0001, 0.9999)  # gamma
+        # proposed[2] = np.clip(proposed[2], 0.0001, 0.9999)  # sigma
+        # proposed[3] = np.clip(proposed[3], 0.0001, 0.9999)  # overdispersion
         
         return proposed
     
@@ -778,7 +778,7 @@ if __name__ == "__main__":
     pmmh = PMMH(Y_obs, N, num_particles=500, target_ess_ratio=0.9)
     
     # Run PMMH with good initial values
-    num_iterations = 5000
+    num_iterations = 30_000
     # Start with reasonable middle values that should work
     initial_params = np.array([0.9, 0.6, 0.3, 0.625])
     
