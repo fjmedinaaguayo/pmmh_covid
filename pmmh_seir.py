@@ -35,39 +35,95 @@ import time
 # ============================================================================
 
 def BM_SEIR(V_in, params, num_particles, N, m):
-    """SEIR model with Brownian motion on log_beta"""
-    num_steps = m + 1  
-    h = 1 / num_steps 
-
-    V = np.zeros([V_in.shape[0], num_particles, num_steps + 1])    
-    new_infected = np.zeros([num_particles])
-
-    kappa, gamma, sigma = params[:3]    
-    V[:,:,0] = V_in
-
-    for t in range(1, num_steps + 1):
-        log_beta_capped = np.clip(V[4,:,t-1], -2, 2)
-        
-        infections = np.exp(log_beta_capped) * V[0, :, t-1] * V[2, :, t-1] / N
-        latent = kappa * V[1, :, t-1]
-        recovered = gamma * V[2, :, t-1]
-        
-        V[0, :, t] = V[0, :, t-1] - infections*h
-        V[1, :, t] = V[1, :, t-1] + (infections  - latent)*h
-        V[2, :, t] = V[2, :, t-1] + (latent - recovered)*h
-        V[3, :, t] = V[3, :, t-1] + recovered*h
-        
-        V[0, :, t] = np.maximum(V[0, :, t], 0)
-        V[1, :, t] = np.maximum(V[1, :, t], 0)
-        V[2, :, t] = np.maximum(V[2, :, t], 0)
-        V[3, :, t] = np.maximum(V[3, :, t], 0)
-        
-        dB = stats.norm(0, 1).rvs(num_particles)
-        V[4,:,t] = V[4,:,t-1] + sigma * np.sqrt(h) * dB
-        
-        new_infected += infections*h
+    """
+    Optimized SEIR model with Brownian motion on log_beta
     
-    return V[:,:,-1], new_infected
+    Optimized for m=0 case (single time step, no sub-stepping)
+    which is the most common usage in this code.
+    """
+    kappa, gamma, sigma = params[:3]
+    
+    # Fast path for m=0 (single time step, h=1)
+    if m == 0:
+        S_t = V_in[0, :]
+        E_t = V_in[1, :]
+        I_t = V_in[2, :]
+        R_t = V_in[3, :]
+        log_beta_t = V_in[4, :]
+        
+        # Dynamic upper bound for log_beta (h=1, so no division by h)
+        max_SI = np.maximum(S_t, I_t)
+        log_beta_max = np.where(max_SI > 0, np.log(N / max_SI), 20.0)
+        log_beta_capped = np.minimum(log_beta_t, log_beta_max)
+        
+        # SEIR dynamics (h=1, so no multiplication by h)
+        infections = np.exp(log_beta_capped) * S_t * I_t / N
+        latent = kappa * E_t
+        recovered = gamma * I_t
+        
+        # Update states with non-negativity constraints
+        S_new = np.maximum(S_t - infections, 0.0)
+        E_new = np.maximum(E_t + infections - latent, 0.0)
+        I_new = np.maximum(I_t + latent - recovered, 0.0)
+        R_new = np.maximum(R_t + recovered, 0.0)
+        
+        # Brownian motion update (h=1, so sqrt(h)=1)
+        log_beta_new = log_beta_t + sigma * np.random.randn(num_particles)
+        
+        # Stack results
+        V_out = np.array([S_new, E_new, I_new, R_new, log_beta_new])
+        
+        return V_out, infections
+    
+    # General case for m > 0 (sub-stepping with Euler-Maruyama)
+    else:
+        num_steps = m + 1  
+        h = 1 / num_steps 
+
+        V = np.zeros([V_in.shape[0], num_particles, num_steps + 1])    
+        new_infected = np.zeros([num_particles])
+
+        V[:,:,0] = V_in
+
+        for t in range(1, num_steps + 1):
+            # No lower clip: allow log_beta → -∞ (β → 0)
+            # Upper clip: dynamically computed to prevent negative SEIR compartments
+            # Constraint: infections*h ≤ min(S, I)
+            # infections = β * S * I / N, so: β * S * I / N * h ≤ min(S, I)
+            # Therefore: β ≤ min(S, I) * N / (S * I * h) = N / (max(S, I) * h)
+            
+            S_t = V[0, :, t-1]
+            I_t = V[2, :, t-1]
+            
+            # Calculate safe upper bound for each particle
+            # Avoid division by zero: if S=0 or I=0, infections will be 0 anyway
+            max_SI = np.maximum(S_t, I_t)
+            safe_beta_max = np.where(max_SI > 0, N / (max_SI * h), np.inf)
+            log_beta_max = np.log(safe_beta_max)
+            
+            # Clip log_beta: no lower bound, dynamic upper bound per particle
+            log_beta_capped = np.minimum(V[4, :, t-1], log_beta_max)
+            
+            infections = np.exp(log_beta_capped) * S_t * I_t / N
+            latent = kappa * V[1, :, t-1]
+            recovered = gamma * V[2, :, t-1]
+            
+            V[0, :, t] = V[0, :, t-1] - infections*h
+            V[1, :, t] = V[1, :, t-1] + (infections  - latent)*h
+            V[2, :, t] = V[2, :, t-1] + (latent - recovered)*h
+            V[3, :, t] = V[3, :, t-1] + recovered*h
+            
+            V[0, :, t] = np.maximum(V[0, :, t], 0)
+            V[1, :, t] = np.maximum(V[1, :, t], 0)
+            V[2, :, t] = np.maximum(V[2, :, t], 0)
+            V[3, :, t] = np.maximum(V[3, :, t], 0)
+            
+            dB = np.random.randn(num_particles)
+            V[4,:,t] = V[4,:,t-1] + sigma * np.sqrt(h) * dB
+            
+            new_infected += infections*h
+        
+        return V[:,:,-1], new_infected
 
 
 # ============================================================================
@@ -131,7 +187,7 @@ class SEIRSMC:
         num_particles = particles_t.shape[1]
         
         proposed_log_beta = particles_t[-1, :] + np.random.normal(0, step_size, num_particles)
-        proposed_log_beta = np.clip(proposed_log_beta, -2, 2)
+        # proposed_log_beta = np.clip(proposed_log_beta, -2, 2)
         
         proposed_particles = particles_t.copy()
         proposed_particles[-1, :] = proposed_log_beta
@@ -247,16 +303,21 @@ class SEIRSMC:
     
     def annealing_step(self, particles_t, particles_tplus1, weekly_infections, 
                        log_likelihoods, observation, time_step=None):
-        """Full annealing sequence from alpha=0 to alpha=1"""
+        """
+        Full annealing sequence from alpha=0 to alpha=1
+        
+        Returns the final resampling indices for ancestry tracking
+        """
         alpha = 0.0
         log_Z = 0.0
         max_steps = 100
         
         cumulative_log_weights = np.zeros(len(log_likelihoods))
+        cumulative_resample_indices = np.arange(len(log_likelihoods))
         
         valid_mask = self.is_valid(particles_tplus1, weekly_infections)
         if not np.any(valid_mask):
-            return particles_t, particles_tplus1, weekly_infections, log_likelihoods, -np.inf
+            return particles_t, particles_tplus1, weekly_infections, log_likelihoods, -np.inf, None
         
         log_likelihoods[~valid_mask] = -np.inf
         
@@ -285,6 +346,8 @@ class SEIRSMC:
                 weekly_infections = weekly_infections[indices]
                 log_likelihoods = log_likelihoods[indices]
                 cumulative_log_weights = np.zeros(len(log_likelihoods))
+                # Track cumulative resampling for ancestry
+                cumulative_resample_indices = cumulative_resample_indices[indices]
             
             particles_t, log_likelihoods, accept_rate = self.mcmc_step(
                 particles_t, log_likelihoods, observation, alpha_new, return_accept_rate=True
@@ -299,12 +362,14 @@ class SEIRSMC:
             indices = self.systematic_resample(weights)
             particles_t = particles_t[:, indices]
             log_likelihoods = log_likelihoods[indices]
+            # Update cumulative indices
+            cumulative_resample_indices = cumulative_resample_indices[indices]
         
         particles_tplus1, weekly_infections, log_likelihoods = self.propagate_and_likelihood(
             particles_t, observation
         )
         
-        return particles_t, particles_tplus1, weekly_infections, log_likelihoods, log_Z
+        return particles_t, particles_tplus1, weekly_infections, log_likelihoods, log_Z, cumulative_resample_indices
     
     def run(self, Y_obs, num_particles, return_path=False):
         """
@@ -325,20 +390,23 @@ class SEIRSMC:
         particles = self.initial_particles(num_particles)
         total_log_marginal_likelihood = 0.0
         
-        # Store particles at each time for path sampling
+        # Store particles and ancestry for path sampling
         if return_path:
             particles_history = []
             infections_history = []
+            ancestry_matrix = np.zeros((num_particles, T), dtype=int)
+            
             particles_history.append(particles.copy())
             infections_history.append(np.ones(num_particles) * self.Y_obs_initial)
+            ancestry_matrix[:, 0] = np.arange(num_particles)  # Initial ancestry
         
         for t in range(1, T):
             particles_next, weekly_infections, log_likelihoods = self.propagate_and_likelihood(
                 particles, Y_obs[t]
             )
             
-            particles, particles_next, weekly_infections, log_likelihoods, log_Z = self.annealing_step(
-                particles, particles_next, weekly_infections, log_likelihoods, Y_obs[t], time_step=None
+            particles, particles_next, weekly_infections, log_likelihoods, log_Z, resample_indices = self.annealing_step(
+                particles, particles_next, weekly_infections, log_likelihoods, Y_obs[t], time_step=t
             )
             
             particles = particles_next
@@ -347,22 +415,57 @@ class SEIRSMC:
             if return_path:
                 particles_history.append(particles.copy())
                 infections_history.append(weekly_infections.copy())
+                
+                # Update ancestry matrix using resampling indices
+                if resample_indices is not None:
+                    # Reshuffle ancestry: ancestry_matrix[:,1:t-1] = ancestry_matrix[resample_indices,1:t-1]
+                    ancestry_matrix[:, :t] = ancestry_matrix[resample_indices, :t]
+                    ancestry_matrix[:, t] = resample_indices
+                else:
+                    ancestry_matrix[:, t] = np.arange(num_particles)
         
         if return_path:
-            # Sample a single path: pick one particle index uniformly
-            # This gives us a draw from the posterior over paths
-            sampled_idx = np.random.randint(0, num_particles)
-            
-            beta_path = np.zeros(T)
-            infection_path = np.zeros(T)
-            
-            for t in range(T):
-                beta_path[t] = np.exp(particles_history[t][4, sampled_idx])  # Convert log_beta to beta
-                infection_path[t] = infections_history[t][sampled_idx]
+            # Sample a coherent trajectory using ancestry matrix
+            beta_path, infection_path = self.sample_path_with_ancestry(
+                particles_history, infections_history, ancestry_matrix
+            )
             
             return total_log_marginal_likelihood, beta_path, infection_path
         else:
             return total_log_marginal_likelihood
+    
+    def sample_path_with_ancestry(self, particles_history, infections_history, ancestry_matrix):
+        """
+        Sample a single coherent trajectory using the ancestry matrix
+        
+        Algorithm:
+        1. Pick a final particle uniformly
+        2. Trace its ancestry backwards through the matrix
+        3. Extract the corresponding values at each time step
+        """
+        T = len(particles_history)
+        num_particles = particles_history[0].shape[1]
+        
+        # Pick final particle uniformly
+        final_idx = np.random.randint(0, num_particles)
+        
+        beta_path = np.zeros(T)
+        infection_path = np.zeros(T)
+        
+        # Trace lineage backwards through ancestry matrix
+        current_idx = final_idx
+        for t in range(T-1, -1, -1):
+            # Extract values for this particle at time t
+            beta_path[t] = np.exp(particles_history[t][4, current_idx])
+            infection_path[t] = infections_history[t][current_idx]
+            
+            # Move to ancestor at previous time (if not at t=0)
+            if t > 0:
+                # Find which particle at time t-1 led to current_idx at time t
+                # This is stored in ancestry_matrix[current_idx, t-1]
+                current_idx = ancestry_matrix[current_idx, t-1]
+        
+        return beta_path, infection_path
 
 
 # ============================================================================
@@ -681,7 +784,8 @@ def analyze_pmmh_results(samples, log_likelihoods, burn_in=None):
     axes[4, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.show()
+    plt.savefig('pmmh_diagnostics.png', dpi=300, bbox_inches='tight')
+    plt.close()
 
 
 def plot_latent_paths(beta_paths, infection_paths, Y_obs, burn_in=None, num_samples=100):
@@ -706,21 +810,22 @@ def plot_latent_paths(beta_paths, infection_paths, Y_obs, burn_in=None, num_samp
     
     fig, axes = plt.subplots(2, 1, figsize=(14, 8))
     
-    # Plot beta paths
+    # Plot log beta paths
+    log_post_burn_betas = np.log(post_burn_betas)
     for idx in indices:
-        axes[0].plot(post_burn_betas[idx], alpha=0.05, color='blue')
+        axes[0].plot(log_post_burn_betas[idx], alpha=0.05, color='blue')
     
     # Plot posterior mean and credible intervals
-    beta_mean = np.mean(post_burn_betas, axis=0)
-    beta_lower = np.percentile(post_burn_betas, 2.5, axis=0)
-    beta_upper = np.percentile(post_burn_betas, 97.5, axis=0)
+    log_beta_mean = np.mean(log_post_burn_betas, axis=0)
+    log_beta_lower = np.percentile(log_post_burn_betas, 2.5, axis=0)
+    log_beta_upper = np.percentile(log_post_burn_betas, 97.5, axis=0)
     
-    axes[0].plot(beta_mean, color='red', linewidth=2, label='Posterior Mean')
-    axes[0].fill_between(range(len(beta_mean)), beta_lower, beta_upper, 
+    axes[0].plot(log_beta_mean, color='red', linewidth=2, label='Posterior Mean')
+    axes[0].fill_between(range(len(log_beta_mean)), log_beta_lower, log_beta_upper, 
                           alpha=0.3, color='red', label='95% Credible Interval')
-    axes[0].set_ylabel('β(t)')
+    axes[0].set_ylabel('log(β(t))')
     axes[0].set_xlabel('Week')
-    axes[0].set_title('Posterior Samples of Transmission Rate β(t)')
+    axes[0].set_title('Posterior Samples of Log Transmission Rate log(β(t))')
     axes[0].legend()
     axes[0].grid(True, alpha=0.3)
     
@@ -743,7 +848,8 @@ def plot_latent_paths(beta_paths, infection_paths, Y_obs, burn_in=None, num_samp
     axes[1].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.show()
+    plt.savefig('latent_paths.png', dpi=300, bbox_inches='tight')
+    plt.close()
 
 
 # ============================================================================
@@ -773,14 +879,12 @@ if __name__ == "__main__":
     print(f"  Peak cases: {Y_obs.max():.0f}")
     
     # Create PMMH sampler
-    # Reduced particles for 3-4x speedup (500 instead of 1000)
-    # Relaxed ESS target for ~20% speedup (0.8 instead of 0.9)
     pmmh = PMMH(Y_obs, N, num_particles=500, target_ess_ratio=0.9)
     
     # Run PMMH with good initial values
-    num_iterations = 30_000
+    num_iterations = 50_000
     # Start with reasonable middle values that should work
-    initial_params = np.array([0.9, 0.6, 0.3, 0.625])
+    initial_params = np.array([0.5, 0.5, 0.5, 0.5])
     
     print(f"\nInitial parameters:")
     print(f"  kappa (E→I rate): {initial_params[0]:.3f}")
