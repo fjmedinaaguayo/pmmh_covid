@@ -51,21 +51,19 @@ def BM_SEIR(V_in, params, num_particles, N, m):
         R_t = V_in[3, :]
         log_beta_t = V_in[4, :]
         
-        # Dynamic upper bound for log_beta (h=1, so no division by h)
-        max_SI = np.maximum(S_t, I_t)
-        log_beta_max = np.where(max_SI > 0, np.log(N / max_SI), 20.0)
-        log_beta_capped = np.minimum(log_beta_t, log_beta_max)
+        # NO CLIPPING - use raw log_beta values, let MCMC handle invalid proposals
+        log_beta_capped = log_beta_t
         
         # SEIR dynamics (h=1, so no multiplication by h)
         infections = np.exp(log_beta_capped) * S_t * I_t / N
         latent = kappa * E_t
         recovered = gamma * I_t
         
-        # Update states with non-negativity constraints
-        S_new = np.maximum(S_t - infections, 0.0)
-        E_new = np.maximum(E_t + infections - latent, 0.0)
-        I_new = np.maximum(I_t + latent - recovered, 0.0)
-        R_new = np.maximum(R_t + recovered, 0.0)
+        # Update states (may go negative - will be caught by validity check)
+        S_new = S_t - infections
+        E_new = E_t + infections - latent
+        I_new = I_t + latent - recovered
+        R_new = R_t + recovered
         
         # Brownian motion update (h=1, so sqrt(h)=1)
         log_beta_new = log_beta_t + sigma * np.random.randn(num_particles)
@@ -86,23 +84,11 @@ def BM_SEIR(V_in, params, num_particles, N, m):
         V[:,:,0] = V_in
 
         for t in range(1, num_steps + 1):
-            # No lower clip: allow log_beta → -∞ (β → 0)
-            # Upper clip: dynamically computed to prevent negative SEIR compartments
-            # Constraint: infections*h ≤ min(S, I)
-            # infections = β * S * I / N, so: β * S * I / N * h ≤ min(S, I)
-            # Therefore: β ≤ min(S, I) * N / (S * I * h) = N / (max(S, I) * h)
-            
+            # NO CLIPPING - use raw log_beta values, let MCMC handle invalid proposals
             S_t = V[0, :, t-1]
             I_t = V[2, :, t-1]
             
-            # Calculate safe upper bound for each particle
-            # Avoid division by zero: if S=0 or I=0, infections will be 0 anyway
-            max_SI = np.maximum(S_t, I_t)
-            safe_beta_max = np.where(max_SI > 0, N / (max_SI * h), np.inf)
-            log_beta_max = np.log(safe_beta_max)
-            
-            # Clip log_beta: no lower bound, dynamic upper bound per particle
-            log_beta_capped = np.minimum(V[4, :, t-1], log_beta_max)
+            log_beta_capped = V[4, :, t-1]
             
             infections = np.exp(log_beta_capped) * S_t * I_t / N
             latent = kappa * V[1, :, t-1]
@@ -113,10 +99,7 @@ def BM_SEIR(V_in, params, num_particles, N, m):
             V[2, :, t] = V[2, :, t-1] + (latent - recovered)*h
             V[3, :, t] = V[3, :, t-1] + recovered*h
             
-            V[0, :, t] = np.maximum(V[0, :, t], 0)
-            V[1, :, t] = np.maximum(V[1, :, t], 0)
-            V[2, :, t] = np.maximum(V[2, :, t], 0)
-            V[3, :, t] = np.maximum(V[3, :, t], 0)
+            # NO CLIPPING - compartments may go negative, caught by validity check
             
             dB = np.random.randn(num_particles)
             V[4,:,t] = V[4,:,t-1] + sigma * np.sqrt(h) * dB
@@ -765,8 +748,25 @@ def analyze_pmmh_results(samples, log_likelihoods, burn_in=None):
         
         # Histogram
         axes[i, 1].hist(post_burn_samples[:, i], bins=30, density=True, alpha=0.7, edgecolor='black')
+        
+        # Add prior distribution as dotted line
+        x_range = np.linspace(0.001, 0.999, 1000)  # Avoid boundary issues
+        if i == 0:  # kappa
+            prior_pdf = stats.beta(11.4, 2.5).pdf(x_range)
+            axes[i, 1].plot(x_range, prior_pdf, 'r--', linewidth=2, label='Prior: Beta(11.4, 2.5)')
+        elif i == 1:  # gamma
+            prior_pdf = stats.beta(12.1, 10.3).pdf(x_range)
+            axes[i, 1].plot(x_range, prior_pdf, 'r--', linewidth=2, label='Prior: Beta(12.1, 10.3)')
+        elif i == 2:  # sigma
+            prior_pdf = stats.beta(1, 1).pdf(x_range)
+            axes[i, 1].plot(x_range, prior_pdf, 'r--', linewidth=2, label='Prior: Beta(1, 1)')
+        elif i == 3:  # overdispersion
+            prior_pdf = stats.beta(300, 180).pdf(x_range)
+            axes[i, 1].plot(x_range, prior_pdf, 'r--', linewidth=2, label='Prior: Beta(300, 180)')
+        
         axes[i, 1].set_xlabel(name)
         axes[i, 1].set_ylabel('Density')
+        axes[i, 1].legend()
         axes[i, 1].grid(True, alpha=0.3)
     
     # Log-likelihood trace
@@ -852,11 +852,74 @@ def plot_latent_paths(beta_paths, infection_paths, Y_obs, burn_in=None, num_samp
     plt.close()
 
 
+def plot_from_saved_results(npz_file='pmmh_chain.npz', burn_in_fraction=0.2):
+    """
+    Load saved PMMH results and generate all plots without re-running the chain
+    
+    Args:
+        npz_file: Path to the saved .npz file
+        burn_in_fraction: Fraction of samples to discard as burn-in (default: 0.2 = 20%)
+    """
+    try:
+        # Load saved results
+        print(f"Loading saved PMMH results from: {npz_file}")
+        data = np.load(npz_file)
+        
+        samples = data['samples']
+        log_likelihoods = data['log_likelihoods']
+        beta_paths = data['beta_paths']
+        infection_paths = data['infection_paths']
+        Y_obs = data['Y_obs']
+        accepted = data['accepted']
+        iteration = data['iteration']
+        
+        print(f"Loaded chain with {iteration} iterations:")
+        print(f"  Parameters: {samples.shape}")
+        print(f"  Beta paths: {beta_paths.shape}")
+        print(f"  Infection paths: {infection_paths.shape}")
+        print(f"  Acceptance rate: {accepted/iteration:.3f}")
+        
+        # Calculate burn-in
+        burn_in = int(iteration * burn_in_fraction)
+        print(f"  Using burn-in: {burn_in} iterations ({burn_in_fraction*100:.0f}%)")
+        
+        # Generate diagnostic plots
+        print("\nGenerating diagnostic plots...")
+        analyze_pmmh_results(samples, log_likelihoods, burn_in=burn_in)
+        
+        # Generate latent path plots
+        print("Generating latent path plots...")
+        plot_latent_paths(beta_paths, infection_paths, Y_obs, burn_in=burn_in, num_samples=200)
+        
+        print("\n" + "="*50)
+        print("Plots generated successfully!")
+        print("  - pmmh_diagnostics.png")
+        print("  - latent_paths.png")
+        print("="*50)
+        
+    except FileNotFoundError:
+        print(f"Error: File '{npz_file}' not found.")
+        print("Make sure you have run the PMMH chain first, or provide the correct file path.")
+    except KeyError as e:
+        print(f"Error: Missing key {e} in the saved file.")
+        print("The saved file may be from an older version or corrupted.")
+    except Exception as e:
+        print(f"Error loading results: {e}")
+
+
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
 
 if __name__ == "__main__":
+    import sys
+    
+    # Check if user wants to plot from saved results
+    if len(sys.argv) > 1 and sys.argv[1] == "--plot":
+        npz_file = sys.argv[2] if len(sys.argv) > 2 else 'pmmh_chain.npz'
+        plot_from_saved_results(npz_file)
+        sys.exit(0)
+    
     print("PMMH for SEIR Model - COVID-19 Data")
     print("="*70)
     
@@ -882,7 +945,7 @@ if __name__ == "__main__":
     pmmh = PMMH(Y_obs, N, num_particles=500, target_ess_ratio=0.9)
     
     # Run PMMH with good initial values
-    num_iterations = 50_000
+    num_iterations = 125_000
     # Start with reasonable middle values that should work
     initial_params = np.array([0.5, 0.5, 0.5, 0.5])
     
