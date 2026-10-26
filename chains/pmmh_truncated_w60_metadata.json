@@ -1,0 +1,171 @@
+{
+  "created_at": "2026-08-21T14:00:44.761391",
+  "mcmc_specification": {
+    "adapt_every": 1000,
+    "adapt_gamma_power": 0.6,
+    "adapt_proposal": false,
+    "adapt_ridge": 1e-05,
+    "adapt_shrinkage": 0.05,
+    "adapt_start": 2000,
+    "adapt_stop": 100000,
+    "algorithm": "Particle Marginal Metropolis-Hastings",
+    "initial_params": [
+      0.5,
+      0.5,
+      0.5,
+      1.5
+    ],
+    "initial_step_sizes": [
+      0.05,
+      0.1,
+      0.05,
+      0.05
+    ],
+    "min_step_sizes": [
+      0.005,
+      0.005,
+      0.01,
+      0.01
+    ],
+    "num_iterations": 100000,
+    "proposal": "multivariate Gaussian random walk"
+  },
+  "model_specification": {
+    "fixed_population_N": 126014024.0,
+    "initial_observation": 4.0,
+    "model": "SEIR with Brownian motion on log_beta",
+    "num_observations": 60,
+    "observation_model": {
+      "distribution": "Negative Binomial",
+      "mean": "weekly_infections",
+      "overdispersion_param": "nu",
+      "underreporting_factor": 15.0
+    },
+    "state_vector": [
+      "S",
+      "E",
+      "I",
+      "R",
+      "log_beta"
+    ],
+    "time_step": "weekly",
+    "transitions": {
+      "new_infected": "exp(log_beta_t) * S_t * I_t / N",
+      "observed_infections": "kappa * E_t",
+      "recovered": "gamma * I_t"
+    }
+  },
+  "outputs": {
+    "chain_file": "pmmh_chain_truncated_w60.npz",
+    "diagnostics_files": [
+      "pmmh_diagnostics.png",
+      "latent_paths.png"
+    ],
+    "metadata_file": "pmmh_chain_truncated_w60_metadata.json"
+  },
+  "particle_filter_specification": {
+    "algorithm": "annealed SMC",
+    "max_annealing_steps": 100,
+    "num_particles": 5000,
+    "particle_mcmc_jitter_enabled": true,
+    "resample_threshold_ess_ratio": 0.5,
+    "resampling": "systematic",
+    "target_ess_ratio": 0.9
+  },
+  "prior_specification": {
+    "gamma": {
+      "alpha": 10.0,
+      "beta": 10.0,
+      "dist": "beta",
+      "mean": 0.5,
+      "support": [
+        0.0,
+        1.0
+      ]
+    },
+    "kappa": {
+      "alpha": 9.0,
+      "beta": 3.0,
+      "dist": "beta",
+      "mean": 0.75,
+      "support": [
+        0.0,
+        1.0
+      ]
+    },
+    "nu": {
+      "dist": "gamma",
+      "interval_high": 2.5,
+      "interval_low": 1.5,
+      "mass_in_interval": 0.999999,
+      "mean": 2.0,
+      "rate": 209.11423684110946,
+      "scale": 0.004782075171475898,
+      "shape": 418.22847368221886
+    },
+    "param_order": [
+      "kappa",
+      "gamma",
+      "sigma",
+      "nu"
+    ],
+    "sigma": {
+      "dist": "gamma",
+      "interval_high": null,
+      "interval_low": null,
+      "mass_in_interval": null,
+      "mean": 10.0,
+      "rate": 0.1,
+      "scale": 10.0,
+      "shape": 1.0
+    },
+    "version": "2.0"
+  },
+  "runtime_status": {
+    "acceptance_rate": 0.47327,
+    "accepted": 47327,
+    "current_log_likelihood": -661.92906297827,
+    "current_parameters": [
+      0.40477960831817056,
+      0.38183344808735975,
+      0.3655293132591896,
+      2.0826254935310047
+    ],
+    "current_proposal_covariance": [
+      [
+        0.0025000000000000005,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.010000000000000002,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0025000000000000005,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0025000000000000005
+      ]
+    ],
+    "elapsed_seconds": 35294.15461111069,
+    "iteration": 100000
+  },
+  "script": "PMMH_SEIR_wSTATES_nu_underreport.py",
+  "software": {
+    "numpy": "1.24.3",
+    "pandas": "2.0.3",
+    "platform": "macOS-15.4.1-arm64-arm-64bit",
+    "python": "3.11.5 (main, Sep 11 2023, 08:31:25) [Clang 14.0.6 ]",
+    "scipy": "1.11.1"
+  }
+}

@@ -1,0 +1,4 @@
+__pycache__/
+figures/
+# Chains are large; host them externally (e.g. Zenodo) and place them in chains/
+chains/*.npz
